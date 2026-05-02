@@ -348,6 +348,9 @@ struct audioItems_t {
     float    state_biquad[3][4] = {0};
     uint8_t  volume = 0;
     uint8_t  volume_steps = 21;
+    float    min_gain_db = -60.0f; // minimum gain in dB (corresponding to volume = 1)
+    float    max_gain_db = 0.0f;   // maximum gain in dB (corresponding to volume = volume_steps)
+    float    volume_curvature = 2.5f; // 1: linear, 2: square, 3: cubic
     float    cur_volume = 0.0f;
     float    limiter[2] = {0};
     float    balance = 0.0f; // -16.0 dB left ... 0 ... -16 db right

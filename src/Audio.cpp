@@ -5980,6 +5980,13 @@ void Audio::setVolumeSteps(uint8_t steps) {
 
     if (m_audio_items.cur_volume > (float)new_steps) m_audio_items.cur_volume = (float)new_steps;
 }
+
+void Audio::setVolumeCurvature(float min_gain_db, float max_gain_db, float curvature) {
+    m_audio_items.min_gain_db = max(min_gain_db, -90.0f);
+    m_audio_items.max_gain_db = min(max_gain_db, 0.0f);
+    m_audio_items.volume_curvature = min(max(curvature, 1.0f), 3.0f); 
+}
+
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 uint8_t Audio::getVolumeSteps() {
     return m_audio_items.volume_steps;
@@ -6368,39 +6375,39 @@ void Audio::gain_ramp() {
     calculateVolumeLimits();
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-void Audio::calculateVolumeLimits() { // is calculated when the volume or balance changes
+void Audio::calculateVolumeLimits() {
+    // --- Adjustable Parameters ---
+    constexpr float MIN_DB    = -60.0f; // The volume at step 1
+    constexpr float MAX_DB    = 0.0f;   // The volume at max step
+    constexpr float CURVATURE = 2.0f;   // 1.0 = Linear, 2.0 = Square, 3.0 = Cubic
+    // -----------------------------
 
     constexpr float BALANCE_DB = -16.0f;
-    constexpr float MIN_DB = -60.0f; // quiet
-    constexpr float MAX_DB = 0.0f;   // full level
 
     auto volumeToLinear = [&](uint8_t volume, uint8_t steps) {
-        if (volume == 0) {
-            return 0.0f; // real silence
-        }
+        if (volume == 0) return 0.0f;
 
-        float t = (float)volume / (float)steps; // 0…1
+        // 1. Get normalized position (0.0 to 1.0)
+        float t = (float)volume / (float)steps;
 
-        //    float dB = MIN_DB + t * (MAX_DB - MIN_DB);
-        float dB = -112.0f * t * t * t + 172.0f * t * t + MIN_DB;
+        // 2. Apply the power curve to 't' to change the "shape"
+        // This spreads out the lower values so they aren't so quiet.
+        float shapedT = powf(t, 1.0f / m_audio_items.volume_curvature); 
 
+        // 3. Map to dB range
+        float dB = m_audio_items.min_gain_db + shapedT * (m_audio_items.max_gain_db - m_audio_items.min_gain_db);
+
+        // 4. Convert dB to Amplitude
         return powf(10.0f, dB / 20.0f);
     };
 
     float vol = volumeToLinear(m_audio_items.cur_volume, m_audio_items.volume_steps);
 
-    float l_db = 0.0f;
-    float r_db = 0.0f;
-
-    if (m_audio_items.balance > 0.0f) { // emphasize on the right → quieter on the left
-        l_db = BALANCE_DB * ((float)m_audio_items.balance / 16.0f);
-    } else if (m_audio_items.balance < 0.0f) { // emphasize on the left → quieter on the right
-        r_db = BALANCE_DB * ((float)-m_audio_items.balance / 16.0f);
-    }
+    float l_db = (m_audio_items.balance > 0) ? (BALANCE_DB * (m_audio_items.balance / 16.0f)) : 0.0f;
+    float r_db = (m_audio_items.balance < 0) ? (BALANCE_DB * (-m_audio_items.balance / 16.0f)) : 0.0f;
 
     m_audio_items.limiter[LEFTCHANNEL] = vol * powf(10.0f, l_db / 20.0f);
     m_audio_items.limiter[RIGHTCHANNEL] = vol * powf(10.0f, r_db / 20.0f);
-    AUDIO_LOG_DEBUG("m_limiter[LEFTCHANNEL] %f, m_limiter[RIGHTCHANNEL] %f", m_audio_items.limiter[LEFTCHANNEL], m_audio_items.limiter[RIGHTCHANNEL]);
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 void Audio::processSpectrum() {

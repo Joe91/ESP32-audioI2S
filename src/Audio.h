@@ -127,6 +127,7 @@ class Audio {
     void             setOutput48KHz(bool f48);
     void             setBalance(float balance = 0.0f);
     void             setVolumeSteps(uint8_t steps);
+    void             setVolumeCurvature(float min_gain_db, float max_gain_db, float curvature);
     uint8_t          getVolumeSteps();
     void             setVolume(uint8_t vol, uint8_t curve = 0);
     uint8_t          getVolume();
