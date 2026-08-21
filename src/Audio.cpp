@@ -3881,11 +3881,17 @@ void Audio::playChunk() {
             // m_i2sWorkBuff -> I2S
             //--------------------------------------------------------------------------------------------------------
 
+            // Convert the processed, left-aligned 32-bit samples to 16-bit PCM in place.
+            int16_t* i2sSamples16 = reinterpret_cast<int16_t*>(m_i2sWorkBuff.get());
+            for (size_t i = 0; i < readWords; ++i) {
+                i2sSamples16[i] = static_cast<int16_t>(std::clamp(m_i2sWorkBuff[i] >> 16, (int32_t)INT16_MIN, (int32_t)INT16_MAX));
+            }
+
             size_t bytesConsumed = 0;
             if (continueI2S) {
-                m_plCh.err = i2s_channel_write(m_i2s_tx_handle, m_i2sWorkBuff.get(), readWords * sizeof(int32_t), &bytesConsumed, 10);
+                m_plCh.err = i2s_channel_write(m_i2s_tx_handle, i2sSamples16, readWords * sizeof(int16_t), &bytesConsumed, 10);
             } else {
-                bytesConsumed = readWords * sizeof(int32_t);
+                bytesConsumed = readWords * sizeof(int16_t);
             }
 
             if (bytesConsumed == 0) {
@@ -3894,9 +3900,9 @@ void Audio::playChunk() {
                 break;
             }
 
-            if (bytesConsumed != readWords * sizeof(int32_t)) { AUDIO_LOG_WARN("partial write: {} / {}", bytesConsumed, readWords * sizeof(int32_t)); }
+            if (bytesConsumed != readWords * sizeof(int16_t)) { AUDIO_LOG_WARN("partial write: {} / {}", bytesConsumed, readWords * sizeof(int16_t)); }
 
-            SamplesBuff.bytesRead(bytesConsumed / sizeof(int32_t));
+            SamplesBuff.bytesRead(bytesConsumed / sizeof(int16_t));
             m_dmaFreeDesc.fetch_sub(1, std::memory_order_release);
         }
     }
@@ -6308,7 +6314,7 @@ bool Audio::i2s_config() {
     }
 
     memset(&m_i2s_std_cfg, 0, sizeof(i2s_std_config_t));
-    m_i2s_std_cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO); // Set to enable bit shift in Philips mode
+    m_i2s_std_cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO); // Set to enable bit shift in Philips mode
     m_i2s_std_cfg.gpio_cfg.bclk = I2S_GPIO_UNUSED;                                                                // BCLK, Assignment in setPinout()
     m_i2s_std_cfg.gpio_cfg.din = I2S_GPIO_UNUSED;                                                                 // not used
     m_i2s_std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;                                                                // DOUT, Assignment in setPinout()
@@ -6747,9 +6753,9 @@ void Audio::reconfigI2S() {
     i2s_channel_disable(m_i2s_tx_handle);
 
     if (m_i2s_items.commFMT) {
-        m_i2s_std_cfg.slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO);
+        m_i2s_std_cfg.slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     } else {
-        m_i2s_std_cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO);
+        m_i2s_std_cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     }
     i2s_channel_reconfig_std_slot(m_i2s_tx_handle, &m_i2s_std_cfg.slot_cfg);
 
