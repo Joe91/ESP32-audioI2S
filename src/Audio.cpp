@@ -4,8 +4,8 @@
 
     Created on: 28.10.2018                                                                                                  */
 char audioI2SVers[] = "\
-    Version 4.0.0c9                                                                                                                         ";
-/*  Updated on: Aug 21, 2026
+    Version 4.0.0m                                                                                                                         ";
+/*  Updated on: Sep 02, 2026
 
     Author: Wolle (schreibfaul1)
     Audio library for ESP32, ESP32-S3 or ESP32-P4
@@ -803,6 +803,7 @@ void Audio::setDefaults() {
     m_m3u8_host.reset();
     m_cab.reset();
     m_cat.reset();
+    m_content_type.reset();
 
     m_outBuff.clear();       // Clear OutputBuffer
     m_resamplesBuff.clear(); // Clear ResamplesBuff
@@ -1187,7 +1188,7 @@ bool Audio::httpPrint(const char* host) {
 
     ps_ptr<char> c_host = host; // copy of host
 
-    if (!c_host.valid()) {
+    if (!c_host.valid() || !c_host.strlen()) { // nullptr or empty string
         AUDIO_LOG_ERROR("Hostaddress is empty");
         stopSong();
         return false;
@@ -3661,8 +3662,11 @@ uint32_t Audio::stopSong() {
                 m_audiofile.close();
             }
         }
-        //   while (m_validSamples) { AUDIO_LOG_DEBUG("vs {}", m_validSamples); playChunk();} // empty I2S DMA
+        m_dataMode = AUDIO_NONE;
+        m_streamType = ST_NONE;
+        m_playlistFormat = FORMAT_NONE;
         destroy_decoder();
+
     }
     xSemaphoreGive(mutex_audioTaskIsDecoding);
     if (!pdTRUE) AUDIO_LOG_WARN("was unable to obtain the semaphore");
@@ -4203,10 +4207,10 @@ ps_ptr<char> Audio::parsePlaylist_M3U() {
         if (m_playlistContent[i].index_of("http") >= 0) {
             host = m_playlistContent[i];
             host.trim();
-            return host.c_get();
+            return host;
         }
     }
-    return "";
+    return {};
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————-
 ps_ptr<char> Audio::parsePlaylist_PLS() {
@@ -4289,7 +4293,7 @@ ps_ptr<char> Audio::parsePlaylist_PLS() {
             return entries[i].file;
         }
     }
-    return "";
+    return {};
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————-
 ps_ptr<char> Audio::parsePlaylist_ASX() { // Advanced Stream Redirector
@@ -4374,10 +4378,10 @@ ps_ptr<char> Audio::parsePlaylist_ASX() { // Advanced Stream Redirector
     for (int i = 0; i < entries.size(); i++) {
         if (entries[i].url.valid()) {
             info(*this, evt_name, "{}", entries[i].title);
-            return entries[i].url.c_get();
+            return entries[i].url;
         }
     }
-    return "";
+    return {};
 }
 
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————-
@@ -4730,7 +4734,10 @@ void Audio::processLocalFile() {
             playChunk();
             return;
         }
-        if (m_f_ID3v1TagFound) readID3V1Tag();
+        if (m_f_ID3v1TagFound) {
+            m_f_ID3v1TagFound = false;
+            readID3V1Tag();
+        }
     exit:
         ps_ptr<char> afn;                                // audio file name
         if (m_audiofile) afn.assign(m_audiofile.name()); // store temporary the name
@@ -4887,12 +4894,7 @@ void Audio::processWebFile() {
     m_pwf.availableBytes = min(m_client->available(), (int)InBuff.writeSpace());
     m_pwf.bytesAddedToBuffer = audioFileRead(InBuff.getWritePtr(), min(m_pwf.availableBytes, (uint32_t)UINT16_MAX));
     if (m_pwf.bytesAddedToBuffer > 0) { InBuff.bytesWritten(m_pwf.bytesAddedToBuffer); }
-    if (m_audioDataSize && m_audioFilePosition >= m_audioDataSize) {
-        if (!m_f_allDataReceived) m_f_allDataReceived = true;
-    }
-    if (!m_audioDataSize && m_audioFilePosition == m_audioFileSize) {
-        if (!m_f_allDataReceived) m_f_allDataReceived = true;
-    }
+
     // AUDIO_LOG_ERROR("m_audioFilePosition {} >= m_audioDataSize {}, m_f_allDataReceived {}", m_audioFilePosition, m_audioDataSize, m_f_allDataReceived);
     if (!m_decoder && InBuff.bufferFilled() > 127) {
         if (!initializeDecoder()) return;
@@ -4903,8 +4905,8 @@ void Audio::processWebFile() {
             if (m_f_ogg) { m_controlCounter = 100; }
             if ((millis() - m_pwf.ctime) > m_pwf.timeout) {
                 AUDIO_LOG_ERROR("audioHeader reading timeout");
-                m_f_running = false;
-                goto exit;
+                stopSong();
+                return;
             }
             if (InBuff.bufferFilled() > m_pwf.maxFrameSize || (InBuff.bufferFilled() == m_audioFileSize) || m_f_allDataReceived) { // at least one complete frame or the file is smaller
                 InBuff.bytesWasRead(readAudioHeader(InBuff.readSpace()));
@@ -4924,6 +4926,17 @@ void Audio::processWebFile() {
         }
     }
 
+    // if the buffer is often almost empty issue a warning - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    if (m_f_stream) {
+        if (m_audioDataSize && m_audioFilePosition >= m_audioDataSize) {
+            if (!m_f_allDataReceived) m_f_allDataReceived = true;
+        }
+        if (!m_audioDataSize && m_audioFilePosition == m_audioFileSize) {
+            if (!m_f_allDataReceived) m_f_allDataReceived = true;
+        }
+        if (!m_f_allDataReceived) { streamDetection(m_pwf.availableBytes); }
+    }
+
     if (m_fileStartTime > 0 && m_nominal_bitrate) {
         if (getBitRate() > 0)
             setAudioPlayTime(m_fileStartTime);
@@ -4934,15 +4947,16 @@ void Audio::processWebFile() {
 
     // end of file reached? - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     if (m_f_eof) { // m_f_eof and m_f_ID3v1TagFound will be set in playAudioData()
-        if (m_f_ID3v1TagFound) readID3V1Tag();
-    exit:
-        stopSong();
+        if (m_f_ID3v1TagFound)  {
+            m_f_ID3v1TagFound = false;
+            readID3V1Tag();
+        }
+        if (SamplesBuff.bufferFilled()) { // something to play before stopSong()
+            playChunk();
+            return;
+        }
         info(*this, evt_eof, "{}", m_lastHost.c_get());
-
-        m_audioCurrentTime = 0;
-        m_resumeFilePos = -1;
-        m_f_haveNewFilePos = false;
-        m_codec = CODEC_NONE;
+        stopSong();
         return;
     }
 }
@@ -5272,7 +5286,7 @@ void Audio::playAudioData() {
                 goto exit;
             }
 
-            if (m_audioDataStart + m_audioDataSize >= m_audioFilePosition) m_f_allDataReceived = true;
+            if (m_audioDataStart + m_audioDataSize <= m_audioFilePosition) m_f_allDataReceived = true;
             if (m_audioDataSize - m_audioDataReadPtr <= InBuff.getMaxBlockSize()) m_pad.lastFrames = true;
 
             if (m_pad.lastFrames) {
@@ -5517,7 +5531,11 @@ lastToDo:
         m_dataMode = AUDIO_PLAYLISTINIT; // playlist expected
         // AUDIO_LOG_INFO("now parse playlist");
     } else {
-        AUDIO_LOG_INFO("unknown content found at: {}", m_currentHost.c_get());
+        if (m_content_type == "text/html") {
+            AUDIO_LOG_INFO("{} is probably an HTML page", m_currentHost.c_get());
+        } else {
+            AUDIO_LOG_INFO("unknown content found at: {}, content type is: {}", m_currentHost.c_get(), m_content_type);
+        }
         goto exit;
     }
 
@@ -5619,6 +5637,7 @@ bool Audio::initializeDecoder() {
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 bool Audio::parseContentType(ps_ptr<char> ct) {
+    m_content_type = ct;
     enum : int { CT_NONE, CT_MP3, CT_AAC, CT_M4A, CT_WAV, CT_FLAC, CT_PLS, CT_M3U, CT_ASX, CT_M3U8, CT_TXT, CT_AACP, CT_OPUS, CT_OGG, CT_VORBIS };
 
     // MIME types and their CT_Val values
@@ -5719,6 +5738,7 @@ bool Audio::parseContentType(ps_ptr<char> ct) {
         case CT_TXT:
             if (m_expectedCodec == CODEC_AAC) m_codec = CODEC_AAC;
             if (m_expectedCodec == CODEC_MP3) m_codec = CODEC_MP3;
+            if (m_expectedCodec == CODEC_FLAC) m_codec = CODEC_FLAC;
             if (m_expectedPlsFmt == FORMAT_ASX) m_playlistFormat = FORMAT_ASX;
             if (m_expectedPlsFmt == FORMAT_M3U) m_playlistFormat = FORMAT_M3U;
             if (m_expectedPlsFmt == FORMAT_M3U8) m_playlistFormat = FORMAT_M3U8;
@@ -5787,6 +5807,10 @@ void Audio::showstreamtitle(char* st) {
         } else if (artist.valid()) {
             streamTitle.assign(artist.get());
         }
+    }
+
+    else if (ml.starts_with("StreamTitle='';")){
+        streamTitle = "";
     }
 
     else if (ml.index_of("StreamTitle='") == 0) {
@@ -5997,10 +6021,11 @@ void Audio::setDecoderItems() {
     if (m_decoder->getAudioDataStart() > 0) { // only flac-ogg, native flac sets audioDataStart in readFlacHeader()
         m_audioDataStart = m_decoder->getAudioDataStart();
     }
-    if (m_audioDataStart && m_audioDataSize == m_audioFileSize) { m_audioDataSize = m_audioFileSize - m_audioDataStart; }
-
+    if (isFile() && m_audioDataSize > 0){
+        if(m_audioDataSize == m_audioFileSize) { m_audioDataSize = m_audioFileSize - m_audioDataStart; }
+        info(*this, evt_info, "Audio-Length: {}", m_audioDataSize);
+    }
     info(*this, evt_info, "Audio-Data-Start: {}", m_audioDataStart);
-    info(*this, evt_info, "Audio-Length: {}", m_audioDataSize);
 
     if (getBitsPerSample() != 8 && getBitsPerSample() != 16 && getBitsPerSample() != 24 && getBitsPerSample() != 32) {
         AUDIO_LOG_ERROR("Bits per sample must be 8, 16, 24 or 32 found {}", getBitsPerSample());
@@ -6225,11 +6250,6 @@ int Audio::sendBytes(uint8_t* data, size_t len) {
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 uint32_t Audio::calculate_average_bitrate(uint64_t sum_bytes_in, uint64_t sum_samples) {
-    if (m_cab.counter == 0) {
-        m_cab.estimated_bitrate = m_channels * m_i2s_items.sampleRate * m_bitsPerSample / est_compression[m_codec];
-        AUDIO_LOG_DEBUG("estimated bitrate {}", m_cab.estimated_bitrate);
-    }
-    m_cab.counter++;
 
     if (sum_samples) m_cab.average_bitrate = sum_bytes_in * 8 * m_i2s_items.sampleRate / sum_samples;
 
@@ -6262,7 +6282,7 @@ void Audio::calculateAudioTime(uint16_t bytes_decoder_in, uint16_t samples_decod
     m_samples_since_start += samples_decoder_out;
 
     m_avr_bitrate = calculate_average_bitrate(m_cat.sum_bytes_in, m_cat.sum_samples);
-    if (m_avr_bitrate) {
+    if (m_avr_bitrate && m_audioDataSize && isFile()) {
         m_avr_file_duration = round(((float)m_audioDataSize * 8 / m_avr_bitrate));
         m_avr_samples_in_file = m_avr_file_duration * m_i2s_items.sampleRate;
     }
@@ -7039,7 +7059,14 @@ void Audio::gain_ramp() {
     else if (m_audio_items.cur_volume > m_audio_items.volume_steps)
         m_audio_items.cur_volume = m_audio_items.volume_steps;
 
-    calculateVolumeLimits();
+    // calculateVolumeLimits() is expensive (powf()); skip when nothing changed since last tick
+    if (!m_limiterComputed || m_audio_items.cur_volume != m_lastLimiterVolume ||
+        m_audio_items.balance != m_lastLimiterBalance) {
+        calculateVolumeLimits();
+        m_lastLimiterVolume  = m_audio_items.cur_volume;
+        m_lastLimiterBalance = m_audio_items.balance;
+        m_limiterComputed    = true;
+    }
 }
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 void Audio::calculateVolumeLimits() { // is calculated when the volume or balance changes
@@ -7330,7 +7357,7 @@ uint32_t Audio::getInBufferSize() {
 // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 void Audio::stereo2mono(int32_t* buff, size_t len) {
 
-    for (uint16_t i = 0; i < len * 2; i += 2) {
+    for (size_t i = 0; i + 1 < len; i += 2) {
         int64_t l = buff[i];
         int64_t r = buff[i + 1];
         int32_t m = (int32_t)((l + r) >> 1); // average, without overflow

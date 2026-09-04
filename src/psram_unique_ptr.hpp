@@ -2,6 +2,8 @@
 
 #include "Arduino.h"
 #include <algorithm>
+#include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -87,7 +89,6 @@ class ps_ptr {
     size_t                             allocated_size = 0;
     char*                              name = nullptr;     // member for object name
     static inline T                    dummy{};            // For invalid accesses
-    size_t                             length_ = 0;        // actual number of characters
     size_t                             m_fifoWrite = 0;    // fifo functionality for arrays
     size_t                             m_fifoRead = 0;     // fifo functionality for arrays
     size_t                             m_num_elements = 0; // number of elements in calloc ->  number of T elements in FIFO
@@ -872,16 +873,17 @@ class ps_ptr {
     // 📌📌📌  P U S H _ B A C K   📌📌📌
     // append individual characters
     // ps_ptr<char>s; s = "abc"; s.push_back('1); -> abc1
-
     void push_back(char c) {
-        if (length + 1 >= capacity()) {
-            // Wenn zu klein, Kapazität verdoppeln (wie std::string)
-            size_t new_cap = (capacity() == 0) ? 16 : capacity() * 2;
-            reserve(new_cap);
-        }
+        if constexpr (std::is_same_v<T, char>) {
+            if (!mem) { reserve(16); }
 
-        mem.get()[length++] = c;
-        mem.get()[length] = '\0';
+            size_t len = std::strlen(mem.get());
+
+            if (len + 1 >= capacity()) { reserve(capacity() == 0 ? 16 : capacity() * 2); }
+
+            mem.get()[len] = c;
+            mem.get()[len + 1] = '\0';
+        }
     }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  A S S I G N _ V E C T O R  📌📌📌
@@ -892,9 +894,6 @@ class ps_ptr {
         if (mem) std::memcpy(mem.get(), out.data(), out.size());
     }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-    // 📌📌📌  L E N G T H   📌📌📌
-    size_t length() const { return length_; }
-    // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  C A P A C I T Y   📌📌📌
     size_t capacity() const { return allocated_size ? allocated_size - 1 : 0; }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
@@ -903,9 +902,9 @@ class ps_ptr {
         if (new_cap + 1 <= allocated_size) return; // genug Platz vorhanden
 
         char*  old_data = mem.release();
-        size_t old_len = length();
-
+        size_t old_len = old_data ? std::strlen(old_data) : 0;
         size_t new_size = new_cap + 1; // +1 für '\0'
+
         if (psramFound())
             mem.reset(static_cast<char*>(ps_malloc(new_size)));
         else
@@ -918,15 +917,11 @@ class ps_ptr {
         }
 
         if (old_data) {
-            if (old_len > 0)
-                std::memcpy(mem.get(), old_data, old_len + 1);
-            else
-                mem.get()[0] = '\0';
+            std::memcpy(mem.get(), old_data, old_len + 1);
             free(old_data);
         } else {
             mem.get()[0] = '\0';
         }
-
         allocated_size = new_size;
     }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
@@ -949,6 +944,12 @@ class ps_ptr {
         std::string_view sv(str); // C++17, sicherer als strlen
         return sv.starts_with(prefix);
     }
+
+    template <typename U = T>
+        requires std::is_same_v<U, char>
+    bool starts_with(const ps_ptr<char>& prefix) const {
+        return starts_with(prefix.c_get());
+    }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  E N D S _ W I T H   📌📌📌
 
@@ -969,6 +970,13 @@ class ps_ptr {
         std::string_view sv(str); // C++17, sicherer als strlen
         return sv.ends_with(prefix);
     }
+
+    template <typename U = T>
+        requires std::is_same_v<U, char>
+    bool ends_with(const ps_ptr<char>& prefix) const {
+        return ends_with(prefix.c_get());
+    }
+
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  S T A R T S _ W I T H _ I C A S E   📌📌📌
 
@@ -992,6 +1000,13 @@ class ps_ptr {
 
         return strncasecmp_local(str, prefix, prefix_len) == 0;
     }
+
+    template <typename U = T>
+        requires std::is_same_v<U, char>
+    bool starts_with_icase(const ps_ptr<char>& prefix) const {
+        return starts_with_icase(prefix.c_get());
+    }
+
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  E N D S _ W I T H _ I C A S E   📌📌📌
 
@@ -1015,6 +1030,13 @@ class ps_ptr {
 
         return strncasecmp_local(str + str_len - suffix_len, suffix, suffix_len) == 0;
     }
+
+    template <typename U = T>
+        requires std::is_same_v<U, char>
+    bool ends_with_icase(const ps_ptr<char>& prefix) const {
+        return ends_with_icase(prefix.c_get());
+    }
+
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  E Q U A L S   📌📌📌
     // my_ps_ptr t1, t2;
@@ -1444,19 +1466,59 @@ class ps_ptr {
 
         return -1;
     }
-    // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-    // 📌📌📌  S U B S T R  📌📌📌
     ps_ptr<char> substr(size_t pos, size_t count = std::string::npos) const {
         const char* src = mem.get();
         if (!src) return ps_ptr<char>{};
 
         size_t len = std::strlen(src);
-        if (pos >= len) return ps_ptr<char>{}; // empty back
+
+        if (pos > len) return ps_ptr<char>{};
 
         size_t n = (count == std::string::npos || pos + count > len) ? (len - pos) : count;
 
         return ps_ptr<char>(src + pos, n);
     }
+    // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+    // 📌📌📌  S P L I T  📌📌📌
+
+    // ps_ptr<char> myLoc;
+    // myLoc.assign("Africa/Djibouti&11.60|43.15");
+    // auto parts = myLoc.split("&|");
+    //
+    // if (parts.size() == 3) {
+    //     printf("location=%s", parts[0].c_get());
+    //     printf("lat=%s",      parts[1].c_get());
+    //     printf("long=%s",     parts[2].c_get());
+    // }
+    //
+    // result:
+    // parts[0] = "Africa/Djibouti"
+    // parts[1] = "11.60"
+    // parts[2] = "43.15"
+
+
+    std::vector<ps_ptr<char>> split(const char* delimiters) const {
+        std::vector<ps_ptr<char>> result;
+
+        const char* src = mem.get();
+        if (!src || !delimiters) return result;
+
+        size_t len = std::strlen(src);
+        size_t start = 0;
+
+        for (size_t i = 0; i < len; i++) {
+            // Is the current character a separator?
+            if (std::strchr(delimiters, src[i])) {
+                result.push_back(substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        // Remaining text after the last separator
+        result.push_back(substr(start));
+
+        return result;
+    }
+
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  T O L O W E R C A S E  📌📌📌
 
@@ -1960,6 +2022,8 @@ class ps_ptr {
         this->assign(temp.get());
         return true;
     }
+
+    bool insert(const ps_ptr<char>& insertStr, std::size_t pos) { return insert(insertStr.c_get(), pos); }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  S H R I N K _ T O _ F I T  📌📌📌
 
@@ -2004,6 +2068,55 @@ class ps_ptr {
     int32_t to_int32(int base = 10) const { return to_integer<int32_t>(base); }
     int16_t to_int16(int base = 10) const { return to_integer<int16_t>(base); }
     int8_t  to_int8(int base = 10) const { return to_integer<int8_t>(base); }
+
+    // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+    // 📌📌📌  T O F L O A T  📌📌📌
+    float to_float() const {
+        static_assert(std::is_same_v<T, char>, "toFloat() is only valid for ps_ptr<char>");
+
+        if (!mem || !get()) {
+            log_e("toFloat: No valid string data");
+            return 0.0f;
+        }
+
+        const char* str = get();
+
+        // no leading spaces
+        if (std::isspace(static_cast<unsigned char>(*str))) {
+            log_e("toFloat: Leading whitespace is not allowed in '%s'", str);
+            return 0.0f;
+        }
+
+        char* end = nullptr;
+
+        errno = 0;
+        float value = std::strtof(str, &end);
+
+        // is not a number
+        if (end == str) {
+            log_e("toFloat: Invalid numeric value '%s'", str);
+            return 0.0f;
+        }
+
+        // no other chars backwards
+        if (*end != '\0') {
+            log_e("toFloat: Invalid character '%c' in '%s'", *end, str);
+            return 0.0f;
+        }
+
+        // Overflow / Underflow
+        if (errno == ERANGE) {
+            log_e("toFloat: Value out of range '%s'", str);
+            return 0.0f;
+        }
+
+        // NaN and Infinity are not allowed
+        if (!std::isfinite(value)) {
+            log_e("toFloat: Non-finite value '%s'", str);
+            return 0.0f;
+        }
+        return value;
+    }
 
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  B I G _ E N D I A N  📌📌📌
@@ -2281,10 +2394,7 @@ class ps_ptr {
     // 📌📌📌  C L E A R   📌📌📌
 
     void clear() {
-        if (mem && allocated_size > 0) {
-            std::memset(mem.get(), 0, allocated_size);
-            length_ = 0;
-        }
+        if (mem && allocated_size > 0) { std::memset(mem.get(), 0, allocated_size); }
     }
     // —————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
     // 📌📌📌  S I Z E   📌📌📌
